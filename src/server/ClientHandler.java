@@ -13,6 +13,8 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ClientHandler implements Runnable {
@@ -54,8 +56,7 @@ public class ClientHandler implements Runnable {
                 Instrument inst = instruments.get(o.getInstrument());
                 if (!inst.tryAllocate(o.getVolume())) {
                     o.setStatus(OrderStatus.REJECTED);
-                    out.println("REJECTED,"+ o.getId());
-                    System.out.println("Order REJECTED: " + o.getId() + " Client " + o.getClientId() + " " + o.getInstrument());
+                    o.getFuture().complete(OrderStatus.REJECTED);
 
                     orderRegistry.logOrder(o);
                     continue;
@@ -63,17 +64,15 @@ public class ClientHandler implements Runnable {
 
                 orderRepository.add(o);
                 out.println("PENDING," + o.getId());
-                System.out.println("Order PENDING: " + o.getId() + " Client " + o.getClientId()
-                        + " " + o.getType() + " " + o.getVolume() + " " + o.getLimitPrice());
-
                 orderRegistry.logOrder(o);
 
-                o.getFuture().thenAccept(status -> {
-                    out.println("ORDER," + o.getId() +","+status);
-                    System.out.println("Order " + o.getId() + " updated: " + status);
+                ExecutorService notifyExec = Executors.newSingleThreadExecutor();
 
-                    orderRegistry.updateOrderStatus(o.getId(), status.toString());
-                });
+                int orderId = o.getId();
+                o.getFuture().thenAcceptAsync(status -> {
+                    out.println("FINAL," + orderId + "," + status);
+                    orderRegistry.updateOrderStatus(orderId, status.toString());
+                }, notifyExec);
             }
         } catch (IOException ignored) {
             System.out.println("Client disconnected");
