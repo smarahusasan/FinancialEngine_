@@ -27,6 +27,9 @@ public class ClientHandler implements Runnable {
     private final Map<String, Instrument> instruments;
     private final OrderRegistry orderRegistry;
 
+    private static final ExecutorService NOTIFICATION_POOL =
+            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
     public ClientHandler(Socket socket, OrderRepository orderRepository,
                         Map<String, Instrument> instruments,
                         OrderRegistry orderRegistry) {
@@ -91,13 +94,11 @@ public class ClientHandler implements Runnable {
 
                     PerformanceMonitor.incrementCounter("orders_accepted");
 
-                    ExecutorService notifyExec = Executors.newSingleThreadExecutor();
-
                     int orderId = o.getId();
                     o.getFuture().thenAcceptAsync(status -> {
                         out.println("FINAL," + orderId + "," + status);
                         orderRegistry.updateOrderStatus(orderId, status.toString());
-                    }, notifyExec);
+                    }, NOTIFICATION_POOL);
                 } catch (Exception e) {
                     PerformanceMonitor.incrementCounter("request_processing_errors");
                     throw e;
