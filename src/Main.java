@@ -7,15 +7,23 @@ import persistence.CancellationRegistry;
 import persistence.ExecutionRegistry;
 import persistence.OrderRegistry;
 import server.TradingServer;
+import utils.ConfigManager;
 
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class Main {
+
     public static void main(String[] args) throws Exception {
+
+        ConfigManager configManager=ConfigManager.getInstance();
 
         Map<String, Instrument> instruments = new ConcurrentHashMap<>();
         instruments.put("AAPL", new Instrument("AAPL", 200, 100));
@@ -29,16 +37,16 @@ public class Main {
         CancellationRegistry cancellationRegistry = new CancellationRegistry();
 
         ScheduledExecutorService scheduler =
-                Executors.newScheduledThreadPool(6);
+                Executors.newScheduledThreadPool(configManager.getThreadNo());
 
         scheduler.scheduleAtFixedRate(
                 new MatchingEngine(orderRepository, instruments,
                     executionRegistry, cancellationRegistry),
-                0, 2, TimeUnit.SECONDS);
+                0, configManager.getAuditIntervalSeconds(), TimeUnit.SECONDS);
 
         scheduler.scheduleAtFixedRate(
                 new AuditService(instruments, orderRepository),
-                0, 2, TimeUnit.SECONDS);
+                0, configManager.getAuditIntervalSeconds(), TimeUnit.SECONDS);
 
         new Thread(() -> {
             try {
@@ -46,13 +54,13 @@ public class Main {
             } catch (Exception ignored) {}
         }).start();
 
-        for (int i = 1; i <= 5; i++) {
+        for (int i = 1; i <= configManager.getBotNo(); i++) {
             new Thread(new TradingBot(i)).start();
         }
 
         scheduler.schedule(() -> {
             System.out.println("SERVER SHUTDOWN");
             System.exit(0);
-        }, 180, TimeUnit.SECONDS);
+        }, configManager.getServerRunningTimeSeconds(), TimeUnit.SECONDS);
     }
 }

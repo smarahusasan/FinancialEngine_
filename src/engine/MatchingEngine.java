@@ -6,6 +6,7 @@ import model.OrderStatus;
 import model.OrderType;
 import persistence.CancellationRegistry;
 import persistence.ExecutionRegistry;
+import utils.ConfigManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -14,17 +15,12 @@ import java.util.Random;
 
 public class MatchingEngine implements Runnable {
 
-    private static final int EXP_SEC = 30;
-    private static final double MU = 0.05;
-    private static final double SIGMA = 1.0;
-    private static final double DT = 1.0;
-    private static final double COMMISSION = 0.5;
-
     private final OrderRepository orderRepository;
     private final Map<String, Instrument> instruments;
     private final ExecutionRegistry executionRegistry;
     private final CancellationRegistry cancellationRegistry;
     private final Random rnd = new Random();
+    private ConfigManager configManager;
 
     public MatchingEngine(OrderRepository orderRepository,
                           Map<String, Instrument> instruments,
@@ -34,11 +30,12 @@ public class MatchingEngine implements Runnable {
         this.instruments = instruments;
         this.executionRegistry = executionRegistry;
         this.cancellationRegistry = cancellationRegistry;
+        this.configManager=ConfigManager.getInstance();
     }
 
     @Override
     public void run() {
-        instruments.values().forEach(i -> i.updatePrice(MU, SIGMA, DT, rnd));
+        instruments.values().forEach(i -> i.updatePrice(configManager.getMu(), configManager.getSigma(), configManager.getDt(), rnd));
         Instant now = Instant.now();
 
         for (Order o : orderRepository.all()) {
@@ -47,7 +44,7 @@ public class MatchingEngine implements Runnable {
             Instrument inst = instruments.get(o.getInstrument());
             long age = Duration.between(o.getTimestamp(), now).getSeconds();
 
-            if (age > EXP_SEC) cancel(o, inst);
+            if (age > configManager.getOrderExpTimeSeconds()) cancel(o, inst);
             else if (canExecute(o, inst)) execute(o, inst);
         }
     }
@@ -63,7 +60,7 @@ public class MatchingEngine implements Runnable {
         i.release(o.getVolume());
 
         double value = o.getVolume() * i.getPrice();
-        double commission = value * COMMISSION / 100.0;
+        double commission = value * configManager.getCommission() / 100.0;
         i.addProfit(commission);
 
         o.getFuture().complete(OrderStatus.EXECUTED);
@@ -76,6 +73,6 @@ public class MatchingEngine implements Runnable {
         i.release(o.getVolume());
         o.getFuture().complete(OrderStatus.CANCELLED);
 
-        cancellationRegistry.logCancellation(o.getId(), "Order expired after " + EXP_SEC + " seconds");
+        cancellationRegistry.logCancellation(o.getId(), "Order expired after " + configManager.getOrderExpTimeSeconds() + " seconds");
     }
 }
