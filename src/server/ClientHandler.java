@@ -6,6 +6,7 @@ import model.Order;
 import model.OrderStatus;
 import model.OrderType;
 import persistence.OrderRegistry;
+import utils.PerformanceMonitor;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -43,36 +44,64 @@ public class ClientHandler implements Runnable {
         ) {
             String line;
             while ((line = in.readLine()) != null) {
-                String[] p = line.split(",");
-                Order o = new Order(
-                        ID_GEN.getAndIncrement(),
-                        Integer.parseInt(p[0]),
-                        p[1],
-                        OrderType.valueOf(p[2]),
-                        Integer.parseInt(p[3]),
-                        Double.parseDouble(p[4])
-                );
+                try (PerformanceMonitor.Timer timer = PerformanceMonitor.startTimer("total_request_processing")) {
+                    long startParsing = System.nanoTime();
+                    String[] p = line.split(",");
+                    Order o = new Order(
+                            ID_GEN.getAndIncrement(),
+                            Integer.parseInt(p[0]),
+                            p[1],
+                            OrderType.valueOf(p[2]),
+                            Integer.parseInt(p[3]),
+                            Double.parseDouble(p[4])
+                    );
+                    long endParsing = System.nanoTime();
+                    PerformanceMonitor.recordTiming("request_parsing", endParsing - startParsing);
 
-                Instrument inst = instruments.get(o.getInstrument());
-                if (!inst.tryAllocate(o.getVolume())) {
-                    o.setStatus(OrderStatus.REJECTED);
-                    o.getFuture().complete(OrderStatus.REJECTED);
+                    Instrument inst = instruments.get(o.getInstrument());
 
+                    // Verificare lichiditate
+                    long startLiquidity = System.nanoTime();
+                    boolean hasLiquidity = inst.tryAllocate(o.getVolume());
+                    long endLiquidity = System.nanoTime();
+                    PerformanceMonitor.recordTiming("liquidity_check", endLiquidity - startLiquidity);
+
+                    if (!hasLiquidity) {
+                        o.setStatus(OrderStatus.REJECTED);
+                        o.getFuture().complete(OrderStatus.REJECTED);
+
+                        orderRegistry.logOrder(o);
+
+                        PerformanceMonitor.incrementCounter("orders_rejected_no_liquidity");
+                        continue;
+                    }
+
+                    long startAdd = System.nanoTime();
+                    orderRepository.add(o);
+                    long endAdd = System.nanoTime();
+                    PerformanceMonitor.recordTiming("add_to_repository", endAdd - startAdd);
+
+                    out.println("PENDING," + o.getId());
+
+                    // Logging în registry
+                    long startRegistry = System.nanoTime();
                     orderRegistry.logOrder(o);
-                    continue;
+                    long endRegistry = System.nanoTime();
+                    PerformanceMonitor.recordTiming("order_registry_write", endRegistry - startRegistry);
+
+                    PerformanceMonitor.incrementCounter("orders_accepted");
+
+                    ExecutorService notifyExec = Executors.newSingleThreadExecutor();
+
+                    int orderId = o.getId();
+                    o.getFuture().thenAcceptAsync(status -> {
+                        out.println("FINAL," + orderId + "," + status);
+                        orderRegistry.updateOrderStatus(orderId, status.toString());
+                    }, notifyExec);
+                } catch (Exception e) {
+                    PerformanceMonitor.incrementCounter("request_processing_errors");
+                    throw e;
                 }
-
-                orderRepository.add(o);
-                out.println("PENDING," + o.getId());
-                orderRegistry.logOrder(o);
-
-                ExecutorService notifyExec = Executors.newSingleThreadExecutor();
-
-                int orderId = o.getId();
-                o.getFuture().thenAcceptAsync(status -> {
-                    out.println("FINAL," + orderId + "," + status);
-                    orderRegistry.updateOrderStatus(orderId, status.toString());
-                }, notifyExec);
             }
         } catch (IOException ignored) {
             System.out.println("Client disconnected");

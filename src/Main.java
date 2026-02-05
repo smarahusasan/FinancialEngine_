@@ -8,6 +8,7 @@ import persistence.ExecutionRegistry;
 import persistence.OrderRegistry;
 import server.TradingServer;
 import utils.ConfigManager;
+import utils.PerformanceMonitor;
 
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -22,6 +23,12 @@ import java.util.concurrent.TimeUnit;
 public class Main {
 
     public static void main(String[] args) throws Exception {
+
+        System.out.println("=".repeat(80));
+        System.out.println("FINANCIAL TRADING ENGINE - STARTING");
+        System.out.println("Performance monitoring: ENABLED");
+        System.out.println("=".repeat(80));
+        System.out.println();
 
         ConfigManager configManager=ConfigManager.getInstance();
 
@@ -58,8 +65,20 @@ public class Main {
             new Thread(new TradingBot(i)).start();
         }
 
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("\n\nSERVER SHUTDOWN - Generating performance report...\n");
+
+            PerformanceMonitor.printStatistics();
+
+            PerformanceMonitor.exportToFile("performance_report.txt");
+
+            System.out.println("Shutdown complete.");
+        }));
+
         scheduler.schedule(() -> {
-            System.out.println("SERVER SHUTDOWN");
+            System.out.println("\n" + "=".repeat(80));
+            System.out.println("SERVER SHUTDOWN INITIATED");
+            System.out.println("=".repeat(80));
             System.exit(0);
         }, configManager.getServerRunningTimeSeconds(), TimeUnit.SECONDS);
     }
